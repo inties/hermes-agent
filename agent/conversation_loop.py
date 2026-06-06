@@ -573,6 +573,7 @@ def run_conversation(
             platform=getattr(agent, "platform", None) or "",
             sender_id=getattr(agent, "_user_id", None) or "",
         )
+        agent.ephemeral_system_prompt = None  # clear each turn; hook must re-set
         _ctx_parts: list[str] = []
         for r in _pre_results:
             if isinstance(r, dict):
