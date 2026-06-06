@@ -52,6 +52,16 @@ def test_is_destructive_command_treats_install_as_mutating():
     assert run_agent._is_destructive_command("install template.env .env") is True
 
 
+def test_runtime_context_block_contains_current_time():
+    from agent.conversation_loop import _build_runtime_context_block
+
+    block = _build_runtime_context_block()
+
+    assert block.startswith("<runtime_context>")
+    assert "Current time:" in block
+    assert block.endswith("</runtime_context>")
+
+
 @pytest.fixture()
 def agent():
     """Minimal AIAgent with mocked OpenAI client and tool loading."""

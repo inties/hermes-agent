@@ -365,6 +365,16 @@ def build_session_context_prompt(
             "If the user needs a detailed answer, give the short version first "
             "and offer to elaborate."
         )
+    elif context.source.platform == Platform.QQBOT:
+        lines.append("")
+        lines.append(
+            "**Platform notes:** You are responding via QQ. "
+            "For casual chat, keep replies compact and conversational. "
+            "Use a blank line between separate short thoughts when they would "
+            "feel more natural as separate chat bubbles. Do not split code, "
+            "tables, bullet lists, or step-by-step instructions into separate "
+            "bubbles."
+        )
     elif context.source.platform == Platform.YUANBAO:
         lines.append("")
         lines.append(

@@ -798,6 +798,17 @@ def _get_script_timeout() -> int:
     return _DEFAULT_SCRIPT_TIMEOUT
 
 
+def _to_msys_path(path: Path) -> str:
+    """Convert a Windows path (C:\\Users\\x) to MSYS2 format (/c/Users/x)
+    for Git Bash subprocesses. No-op on non-Windows or non-drive-letter paths."""
+    import re
+    posix = path.as_posix()
+    m = re.match(r'^([A-Za-z]):(/.*)?$', posix)
+    if m:
+        return f"/{m.group(1).lower()}{m.group(2) or ''}"
+    return posix
+
+
 def _run_job_script(script_path: str) -> tuple[bool, str]:
     """Execute a cron job's data-collection script and capture its output.
 
@@ -872,7 +883,7 @@ def _run_job_script(script_path: str) -> tuple[bool, str]:
                 "On Windows, install Git for Windows (which ships Git Bash) "
                 "or rewrite the script as Python (.py)."
             )
-        argv = [_bash, str(path)]
+        argv = [_bash, _to_msys_path(path) if sys.platform == "win32" else path.as_posix()]
     else:
         argv = [sys.executable, str(path)]
 

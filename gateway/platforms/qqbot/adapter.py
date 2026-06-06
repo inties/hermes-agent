@@ -37,6 +37,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -147,6 +148,88 @@ def _coerce_list(value: Any) -> List[str]:
     return _coerce_list_impl(value)
 
 
+def _coerce_bool(value: Any, default: bool = True) -> bool:
+    """Coerce a config/env value into bool."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if not text:
+        return default
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+_QQ_HEADER_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+_QQ_TABLE_RULE_RE = re.compile(r"^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$")
+
+
+def _split_delivery_units_for_qq(content: str) -> List[str]:
+    """Split explicit paragraph/line units without touching nested structure."""
+    text = (content or "").strip()
+    if not text:
+        return []
+    if "\n\n" in text:
+        return [unit.strip() for unit in re.split(r"\n\s*\n", text) if unit.strip()]
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def _looks_like_chatty_line_for_qq(line: str) -> bool:
+    """Return True when a line looks like a standalone chat utterance."""
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if len(stripped) > 64:
+        return False
+    if line.startswith((" ", "\t")):
+        return False
+    if stripped.startswith((">", "-", "*", "+", "【", "#", "|", "```")):
+        return False
+    if _QQ_TABLE_RULE_RE.match(stripped):
+        return False
+    if _QQ_HEADER_RE.match(stripped):
+        return False
+    if re.match(r"^\d+[.)]\s", stripped):
+        return False
+    if re.match(r"^\*\*[^*]+\*\*$", stripped):
+        return False
+    return True
+
+
+def _looks_like_heading_line_for_qq(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if _QQ_HEADER_RE.match(stripped):
+        return True
+    return len(stripped) <= 28 and stripped.endswith((":", "："))
+
+
+def _should_split_short_chat_block_for_qq(content: str) -> bool:
+    """Split only compact, chat-like blocks into separate QQ messages."""
+    units = _split_delivery_units_for_qq(content)
+    if not 2 <= len(units) <= 6:
+        return False
+    if _looks_like_heading_line_for_qq(units[0]):
+        return False
+    return all(_looks_like_chatty_line_for_qq(unit) for unit in units)
+
+
+def _split_text_for_qq_delivery(content: str, max_length: int) -> List[str]:
+    """Split QQ delivery text into natural chat bubbles when safe."""
+    if not content:
+        return []
+    if len(content) <= max_length and _should_split_short_chat_block_for_qq(content):
+        return [unit for unit in _split_delivery_units_for_qq(content) if unit]
+    return BasePlatformAdapter.truncate_message(content, max_length)
+
+
 # ---------------------------------------------------------------------------
 # QQAdapter
 # ---------------------------------------------------------------------------
@@ -207,6 +290,12 @@ class QQAdapter(BasePlatformAdapter):
             extra.get("client_secret") or os.getenv("QQ_CLIENT_SECRET", "")
         ).strip()
         self._markdown_support = bool(extra.get("markdown_support", True))
+        self._split_chatty_messages = _coerce_bool(
+            extra.get("split_chatty_messages")
+            if "split_chatty_messages" in extra
+            else os.getenv("QQ_SPLIT_CHATTY_MESSAGES"),
+            True,
+        )
 
         # Auth/ACL policies
         self._dm_policy = str(extra.get("dm_policy", "open")).strip().lower()
@@ -605,10 +694,15 @@ class QQAdapter(BasePlatformAdapter):
                     quick_disconnect_count = 0
                 else:
                     backoff_idx += 1
-                    if backoff_idx >= MAX_RECONNECT_ATTEMPTS:
-                        logger.error("[%s] Max reconnect attempts reached (QQCloseError)", self._log_tag)
-                        self._mark_disconnected()
-                        return
+                if backoff_idx >= MAX_RECONNECT_ATTEMPTS:
+                    logger.error("[%s] Max reconnect attempts reached (QQCloseError)", self._log_tag)
+                    self._set_fatal_error(
+                        "qq_reconnect_failed",
+                        f"Max reconnect attempts ({MAX_RECONNECT_ATTEMPTS}) reached after close code {code}",
+                        retryable=True,
+                    )
+                    self._mark_disconnected()
+                    return
 
             except Exception as exc:
                 if not self._running:
@@ -619,6 +713,11 @@ class QQAdapter(BasePlatformAdapter):
 
                 if backoff_idx >= MAX_RECONNECT_ATTEMPTS:
                     logger.error("[%s] Max reconnect attempts reached", self._log_tag)
+                    self._set_fatal_error(
+                        "qq_reconnect_failed",
+                        f"Max reconnect attempts ({MAX_RECONNECT_ATTEMPTS}) reached",
+                        retryable=True,
+                    )
                     self._mark_disconnected()
                     return
 
@@ -641,6 +740,20 @@ class QQAdapter(BasePlatformAdapter):
 
         self._heartbeat_interval = 30.0  # reset until Hello
         try:
+            # Recycle HTTP client to clear any stale connection pool
+            # (e.g. CLOSE_WAIT sockets, lost DNS cache, TLS session issues)
+            # that may have accumulated since the initial connect().
+            old = self._http_client
+            self._http_client = None
+            if old is not None:
+                await old.aclose()
+            from gateway.platforms._http_client_limits import platform_httpx_limits
+            self._http_client = httpx.AsyncClient(
+                timeout=30.0,
+                follow_redirects=True,
+                event_hooks={"response": [_ssrf_redirect_guard]},
+                limits=platform_httpx_limits(),
+            )
             await self._ensure_token()
             gateway_url = await self._get_gateway_url()
             await self._open_ws(gateway_url)
@@ -2324,10 +2437,17 @@ class QQAdapter(BasePlatformAdapter):
             return SendResult(success=True)
 
         formatted = self.format_message(content)
-        chunks = self.truncate_message(formatted, self.MAX_MESSAGE_LENGTH)
+        chunks = (
+            _split_text_for_qq_delivery(formatted, self.MAX_MESSAGE_LENGTH)
+            if self._split_chatty_messages
+            else self.truncate_message(formatted, self.MAX_MESSAGE_LENGTH)
+        )
 
         last_result = SendResult(success=False, error="No chunks")
-        for chunk in chunks:
+        human_delay = self._get_human_delay() if len(chunks) > 1 else 0.0
+        for idx, chunk in enumerate(chunks):
+            if idx > 0 and human_delay > 0:
+                await asyncio.sleep(human_delay)
             last_result = await self._send_chunk(chat_id, chunk, reply_to)
             if not last_result.success:
                 return last_result

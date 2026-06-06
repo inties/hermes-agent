@@ -74,6 +74,22 @@ from utils import base_url_host_matches, env_var_enabled
 logger = logging.getLogger(__name__)
 
 
+def _build_runtime_context_block() -> str:
+    """Return dynamic per-turn context for the current user message."""
+    try:
+        from hermes_time import now as _hermes_now
+        current = _hermes_now()
+    except Exception:
+        return ""
+
+    tz = current.tzname() or str(current.tzinfo or "local")
+    return (
+        "<runtime_context>\n"
+        f"Current time: {current.strftime('%A, %Y-%m-%d %H:%M:%S')} ({tz})\n"
+        "</runtime_context>"
+    )
+
+
 def _ollama_context_limit_error(agent: Any, request_tokens: int) -> Optional[str]:
     """Return a user-facing error when Ollama is loaded with too little context."""
     if not getattr(agent, "tools", None):
@@ -559,14 +575,22 @@ def run_conversation(
         )
         _ctx_parts: list[str] = []
         for r in _pre_results:
-            if isinstance(r, dict) and r.get("context"):
-                _ctx_parts.append(str(r["context"]))
+            if isinstance(r, dict):
+                if r.get("context"):
+                    _ctx_parts.append(str(r["context"]))
+                if r.get("ephemeral_system"):
+                    agent.ephemeral_system_prompt = str(r["ephemeral_system"])
             elif isinstance(r, str) and r.strip():
                 _ctx_parts.append(r)
         if _ctx_parts:
             _plugin_user_context = "\n\n".join(_ctx_parts)
     except Exception as exc:
         logger.warning("pre_llm_call hook failed: %s", exc)
+
+    # Dynamic time changes every turn and would break provider prompt-cache
+    # prefixes if placed in system/session context. Append it to the current
+    # user message at API-call time instead; this is ephemeral and unpersisted.
+    _runtime_user_context = _build_runtime_context_block()
 
     # Main conversation loop
     api_call_count = 0
@@ -579,6 +603,8 @@ def run_conversation(
     truncated_response_parts: List[str] = []
     compression_attempts = 0
     _turn_exit_reason = "unknown"  # Diagnostic: why the loop ended
+    _style_retry_count = 0        # Per-turn: how many transform_llm_output retries fired
+    _style_retry_max = 1          # Per-turn: cap at one rewrite pass
 
     # Per-turn file-mutation verifier state.  Keyed by resolved path;
     # each failed ``write_file`` / ``patch`` call records the error
@@ -802,6 +828,8 @@ def run_conversation(
                         _injections.append(_fenced)
                 if _plugin_user_context:
                     _injections.append(_plugin_user_context)
+                if _runtime_user_context:
+                    _injections.append(_runtime_user_context)
                 if _injections:
                     _base = api_msg.get("content", "")
                     if isinstance(_base, str):
@@ -3813,6 +3841,60 @@ def run_conversation(
                 
                 final_msg = agent._build_assistant_message(assistant_message, finish_reason)
 
+                # ── transform_llm_output hook (retry-aware) ────────────
+                # Fire BEFORE appending the response so a plugin can
+                # request one rewrite pass.  The hook runs inside the
+                # while loop so retry uses the same system prompt prefix
+                # (cached) + auth / streaming pipeline.
+                #
+                # String return  →  replace final_response (legacy).
+                # Dict {"action":"retry","retry_prompt":"..."}  →  retry once.
+                _retry_needed = False
+                try:
+                    from hermes_cli.plugins import invoke_hook as _invoke_hook
+                    _transform_results = _invoke_hook(
+                        "transform_llm_output",
+                        response_text=final_response,
+                        session_id=agent.session_id or "",
+                        model=agent.model,
+                        platform=getattr(agent, "platform", None) or "",
+                        user_message=original_user_message,
+                    )
+                    for _hook_result in _transform_results:
+                        if isinstance(_hook_result, dict) and _hook_result.get("action") == "retry":
+                            if _style_retry_count < _style_retry_max:
+                                _retry_prompt = _hook_result.get("retry_prompt", "")
+                                if _retry_prompt:
+                                    messages.append({
+                                        "role": "user",
+                                        "content": _retry_prompt,
+                                        "_style_guard_retry": True,
+                                    })
+                                    _style_retry_count += 1
+                                    _retry_needed = True
+                                    logger.info(
+                                        "transform_llm_output retry %d/%d session=%s",
+                                        _style_retry_count, _style_retry_max,
+                                        agent.session_id or "",
+                                    )
+                            break
+                        elif isinstance(_hook_result, str) and _hook_result:
+                            final_response = _hook_result
+                            break
+                except Exception:
+                    pass
+
+                if _retry_needed:
+                    continue
+
+                # Remove any _style_guard_retry scaffolding from anywhere in
+                # the message list — the retry prompt may not be at [-1] if
+                # the model made tool calls on the retry turn.
+                messages[:] = [
+                    m for m in messages
+                    if not (isinstance(m, dict) and m.get("_style_guard_retry"))
+                ]
+
                 # Pop thinking-only prefill and empty-response retry
                 # scaffolding before appending the final response.  These
                 # internal turns are only for the next API retry and should
@@ -3829,7 +3911,7 @@ def run_conversation(
                     messages.pop()
 
                 messages.append(final_msg)
-                
+
                 _turn_exit_reason = f"text_response(finish_reason={finish_reason})"
                 if not agent.quiet_mode:
                     agent._safe_print(f"🎉 Conversation completed after {api_call_count} OpenAI-compatible API call(s)")
@@ -4028,27 +4110,6 @@ def run_conversation(
                     final_response = final_response.rstrip() + "\n\n" + footer
         except Exception as _ver_err:
             logger.debug("file-mutation verifier footer failed: %s", _ver_err)
-
-    # Plugin hook: transform_llm_output
-    # Fired once per turn after the tool-calling loop completes.
-    # Plugins can transform the LLM's output text before it's returned.
-    # First hook to return a string wins; None/empty return leaves text unchanged.
-    if final_response and not interrupted:
-        try:
-            from hermes_cli.plugins import invoke_hook as _invoke_hook
-            _transform_results = _invoke_hook(
-                "transform_llm_output",
-                response_text=final_response,
-                session_id=agent.session_id or "",
-                model=agent.model,
-                platform=getattr(agent, "platform", None) or "",
-            )
-            for _hook_result in _transform_results:
-                if isinstance(_hook_result, str) and _hook_result:
-                    final_response = _hook_result
-                    break  # First non-empty string wins
-        except Exception as exc:
-            logger.warning("transform_llm_output hook failed: %s", exc)
 
     # Plugin hook: post_llm_call
     # Fired once per turn after the tool-calling loop completes.

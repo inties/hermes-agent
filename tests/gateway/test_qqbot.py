@@ -99,6 +99,85 @@ class TestQQAdapterInit:
 
 
 # ---------------------------------------------------------------------------
+# QQ chatty message splitting
+# ---------------------------------------------------------------------------
+
+class TestQQChattyMessageSplitting:
+    def _make_adapter(self, **extra):
+        from gateway.platforms.qqbot import QQAdapter
+        adapter = QQAdapter(_make_config(app_id="a", client_secret="b", **extra))
+        adapter._running = True
+        adapter._ws = SimpleNamespace(closed=False)
+        return adapter
+
+    def test_split_short_blank_line_thoughts(self):
+        from gateway.platforms.qqbot.adapter import _split_text_for_qq_delivery
+
+        content = "嗯嗯，我懂。\n\n这个可以。\n\n我先试一下。"
+
+        assert _split_text_for_qq_delivery(content, 4000) == [
+            "嗯嗯，我懂。",
+            "这个可以。",
+            "我先试一下。",
+        ]
+
+    def test_split_short_line_thoughts(self):
+        from gateway.platforms.qqbot.adapter import _split_text_for_qq_delivery
+
+        content = "嗯嗯，我懂。\n这个可以。\n我先试一下。"
+
+        assert _split_text_for_qq_delivery(content, 4000) == [
+            "嗯嗯，我懂。",
+            "这个可以。",
+            "我先试一下。",
+        ]
+
+    def test_keeps_structured_blocks_together(self):
+        from gateway.platforms.qqbot.adapter import _split_text_for_qq_delivery
+
+        content = "结论：\n- 第一条\n- 第二条\n- 第三条"
+
+        assert _split_text_for_qq_delivery(content, 4000) == [content]
+
+    @pytest.mark.asyncio
+    async def test_send_delivers_short_chatty_block_as_multiple_messages(self):
+        adapter = self._make_adapter()
+        sent = []
+
+        async def fake_send_chunk(chat_id, content, reply_to=None):
+            sent.append((chat_id, content, reply_to))
+            return SimpleNamespace(success=True, message_id=f"m{len(sent)}")
+
+        adapter._send_chunk = fake_send_chunk
+
+        result = await adapter.send("openid", "嗯嗯，我懂。\n\n这个可以。", reply_to="source-msg")
+
+        assert result.success is True
+        assert sent == [
+            ("openid", "嗯嗯，我懂。", "source-msg"),
+            ("openid", "这个可以。", None),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_send_can_disable_chatty_splitting(self):
+        adapter = self._make_adapter(split_chatty_messages=False)
+        sent = []
+
+        async def fake_send_chunk(chat_id, content, reply_to=None):
+            sent.append((chat_id, content, reply_to))
+            return SimpleNamespace(success=True, message_id=f"m{len(sent)}")
+
+        adapter._send_chunk = fake_send_chunk
+
+        result = await adapter.send("openid", "嗯嗯，我懂。\n\n这个可以。", reply_to="source-msg")
+
+        assert result.success is True
+        assert sent == [
+            ("openid", "嗯嗯，我懂。\n\n这个可以。", "source-msg"),
+        ]
+
+
+# ---------------------------------------------------------------------------
 # _coerce_list
 # ---------------------------------------------------------------------------
 

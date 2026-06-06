@@ -168,6 +168,19 @@ class TestLocalCliFactory:
 
 
 class TestBuildSessionContextPrompt:
+    def test_prompt_excludes_dynamic_current_time(self):
+        config = GatewayConfig()
+        source = SessionSource(
+            platform=Platform.TELEGRAM,
+            chat_id="111",
+            chat_name="Home Chat",
+            chat_type="dm",
+        )
+        ctx = build_session_context(source, config)
+        prompt = build_session_context_prompt(ctx)
+
+        assert "Current time:" not in prompt
+
     def test_telegram_prompt_contains_platform_and_chat(self):
         config = GatewayConfig(
             platforms={

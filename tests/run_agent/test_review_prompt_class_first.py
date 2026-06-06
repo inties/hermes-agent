@@ -1,14 +1,14 @@
 """Behavior tests for the skill review / combined review prompts.
 
-The review prompts steer the background review agent toward actively updating
-the skill library after most sessions, with a strong bias toward:
+The review prompts steer the background review agent toward conservative,
+reusable skill updates, with a strong bias toward:
   1. Patching currently-loaded skills first,
   2. Patching existing umbrellas next,
   3. Adding references/ files under an existing umbrella,
   4. Creating a new class-level umbrella only when nothing else fits.
 
 User-preference corrections (style, format, verbosity, legibility) are
-first-class skill signals, not just memory signals.
+first-class skill signals only when they generalize to a recurring task class.
 
 These tests assert behavioral *instructions* are present — they do NOT
 snapshot the full prompt text (change-detector).
@@ -21,15 +21,17 @@ from run_agent import AIAgent
 # _SKILL_REVIEW_PROMPT
 # ---------------------------------------------------------------------------
 
-def test_skill_review_prompt_biases_toward_active_updates():
-    """Prompt must frame updating as the default stance, not something rare."""
+def test_skill_review_prompt_biases_toward_conservative_updates():
+    """Prompt must frame skill writes as durable context, not default sediment."""
     prompt = AIAgent._SKILL_REVIEW_PROMPT
-    assert "ACTIVE" in prompt or "active" in prompt.lower(), (
-        "must tell the reviewer to be active"
+    assert "CONSERVATIVE" in prompt or "conservative" in prompt.lower(), (
+        "must tell the reviewer to be conservative"
     )
-    # "missed learning opportunity" or equivalent framing for not acting
-    assert "missed" in prompt.lower() or "opportunity" in prompt.lower(), (
-        "must frame inaction as a miss, not a neutral outcome"
+    assert "ordinary sessions should usually end with" in prompt, (
+        "ordinary sessions should usually produce no skill write"
+    )
+    assert "non-reusable update is worse than no update" in prompt, (
+        "must frame low-signal writes as harmful"
     )
 
 
@@ -41,9 +43,12 @@ def test_skill_review_prompt_treats_user_corrections_as_skill_signal():
     assert any(k in lower for k in ("style", "format", "verbos", "legib", "tone")), (
         "must name style/format/verbosity/legibility as signals"
     )
-    # Must frame these as first-class skill signals (not memory-only)
+    # Must frame these as first-class only when they generalize.
     assert "FIRST-CLASS" in prompt or "first-class" in prompt, (
         "must explicitly label user-preference corrections as first-class skill signals"
+    )
+    assert "only when" in lower and "class of task" in lower, (
+        "must gate preference capture on reusable task behavior"
     )
     # Must mention the correction-type phrases to tune the model's ear
     assert "stop doing" in lower or "don't" in lower or "hate" in lower or "frustrat" in lower, (
@@ -79,8 +84,14 @@ def test_skill_review_prompt_names_three_support_file_kinds():
     assert "templates/" in prompt, "must name templates/ as a support-file kind"
     assert "scripts/" in prompt, "must name scripts/ as a support-file kind"
     # Purpose hints for each kind
-    assert "knowledge" in prompt.lower() or "research" in prompt.lower() or "API docs" in prompt, (
+    assert "reusable support material" in prompt.lower(), (
+        "references/ must be reusable support material, not transcript storage"
+    )
+    assert "knowledge" in prompt.lower() or "research" in prompt.lower() or "API" in prompt, (
         "must mention knowledge-bank / research / API-docs role of references/"
+    )
+    assert "transcripts" in prompt.lower() and "private scenes" in prompt.lower(), (
+        "must block transcripts/private scenes from references/"
     )
     assert "copied" in prompt.lower() or "starter" in prompt.lower() or "reproduce" in prompt.lower(), (
         "must mention that templates/ are starter files to copy/modify"
@@ -116,10 +127,11 @@ def test_skill_review_prompt_flags_overlap_and_defers_to_curator():
     assert "curator" in prompt.lower(), "must defer consolidation to the curator"
 
 
-def test_skill_review_prompt_still_has_opt_out_clause():
-    """'Nothing to save.' must remain as a real-but-not-default option."""
+def test_skill_review_prompt_defaults_to_opt_out_for_ordinary_sessions():
+    """'Nothing to save.' must be the default for ordinary sessions."""
     prompt = AIAgent._SKILL_REVIEW_PROMPT
     assert "Nothing to save." in prompt
+    assert "default for ordinary smooth sessions" in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -133,12 +145,13 @@ def test_combined_review_prompt_has_memory_section():
     assert "memory tool" in prompt
 
 
-def test_combined_review_prompt_skills_biased_toward_active_updates():
-    """Skills half must carry the active-update bias."""
+def test_combined_review_prompt_skills_biased_toward_conservative_updates():
+    """Skills half must carry the conservative-update bias."""
     prompt = AIAgent._COMBINED_REVIEW_PROMPT
     assert "**Skills**" in prompt
-    assert "ACTIVE" in prompt or "active" in prompt.lower()
-    assert "missed" in prompt.lower() or "opportunity" in prompt.lower()
+    assert "CONSERVATIVE" in prompt or "conservative" in prompt.lower()
+    assert "ordinary sessions usually do not need a skill update" in prompt
+    assert "permanent context" in prompt.lower()
 
 
 def test_combined_review_prompt_treats_user_corrections_as_skill_signal():
@@ -146,7 +159,8 @@ def test_combined_review_prompt_treats_user_corrections_as_skill_signal():
     prompt = AIAgent._COMBINED_REVIEW_PROMPT
     lower = prompt.lower()
     assert any(k in lower for k in ("style", "format", "verbos", "legib", "tone"))
-    assert "FIRST-CLASS" in prompt or "first-class" in prompt
+    assert "first-class" in lower
+    assert "if it is a personal fact" in lower
 
 
 def test_combined_review_prompt_prefers_loaded_skills_first():
@@ -171,11 +185,13 @@ def test_combined_review_prompt_names_three_support_file_kinds():
     assert "references/" in prompt
     assert "templates/" in prompt
     assert "scripts/" in prompt
+    assert "private scenes" in prompt.lower()
 
 
 def test_combined_review_prompt_preserves_opt_out_clause():
     prompt = AIAgent._COMBINED_REVIEW_PROMPT
     assert "Nothing to save." in prompt
+    assert "no update is the default" in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +225,10 @@ def _assert_anti_pattern_guidance(prompt: str, label: str) -> None:
     # One-off task narratives (#12812 family)
     assert "one-off" in lower, (
         f"{label}: must call out one-off task narratives as not-skill-worthy"
+    )
+    # Scenario/private content should not become skill text.
+    assert "scenario content" in lower, (
+        f"{label}: must call out scenario content as not-skill-worthy"
     )
 
 
