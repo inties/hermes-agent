@@ -1,4 +1,5 @@
 import json
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -69,6 +70,36 @@ async def test_schedule_from_context_registers_qq_dm_plan():
     assert result["ok"] is True
     assert scheduler.is_scheduled("qqbot:dm:user_openid_1")
     assert scheduler._plans["qqbot:dm:user_openid_1"].reason == "Follow up on the interface details."
+    await scheduler.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_schedule_from_context_from_worker_thread_uses_gateway_loop():
+    runner = FakeRunner()
+    runner._gateway_loop = asyncio.get_running_loop()
+    scheduler = ProactiveChatScheduler(runner)
+    set_scheduler(scheduler)
+    tokens = set_session_vars(
+        platform="qqbot",
+        chat_id="user_openid_1",
+        chat_type="dm",
+        user_id="user_openid_1",
+        session_key="qqbot:dm:user_openid_1",
+        session_id="sid-1",
+    )
+    try:
+        result = json.loads(
+            await asyncio.to_thread(
+                schedule_from_context,
+                {"delay_seconds": 60, "reason": "Threaded tool call should schedule."},
+            )
+        )
+    finally:
+        clear_session_vars(tokens)
+
+    assert result["ok"] is True
+    assert scheduler.is_scheduled("qqbot:dm:user_openid_1")
+    assert scheduler._plans["qqbot:dm:user_openid_1"].reason == "Threaded tool call should schedule."
     await scheduler.shutdown()
 
 
@@ -148,4 +179,3 @@ async def test_real_user_event_cancels_scheduled_plan():
 
     assert not scheduler.is_scheduled("qqbot:dm:user_openid_1")
     await scheduler.shutdown()
-

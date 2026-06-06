@@ -8,6 +8,7 @@ gateway injects a synthetic MessageEvent through the normal adapter pipeline.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 import time
@@ -57,6 +58,54 @@ class ProactiveChatScheduler:
         self._tasks: dict[str, asyncio.Task] = {}
 
     def schedule(
+        self,
+        *,
+        platform: Platform,
+        chat_id: str,
+        user_id: str,
+        session_key: str,
+        session_id: str,
+        delay_seconds: int,
+        reason: str,
+        chat_type: str = "dm",
+        user_name: str = "",
+        chat_name: str = "",
+    ) -> ProactiveChatPlan:
+        kwargs = {
+            "platform": platform,
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "session_key": session_key,
+            "session_id": session_id,
+            "delay_seconds": delay_seconds,
+            "reason": reason,
+            "chat_type": chat_type,
+            "user_name": user_name,
+            "chat_name": chat_name,
+        }
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        target_loop = getattr(self.runner, "_gateway_loop", None) or running_loop
+        if target_loop is None or not target_loop.is_running():
+            raise RuntimeError("gateway event loop is not running")
+        if running_loop is target_loop:
+            return self._schedule_on_loop(**kwargs)
+
+        future = asyncio.run_coroutine_threadsafe(
+            self._schedule_on_loop_async(**kwargs),
+            target_loop,
+        )
+        try:
+            return future.result(timeout=5)
+        except concurrent.futures.TimeoutError as exc:
+            raise RuntimeError("timed out scheduling proactive chat check") from exc
+
+    async def _schedule_on_loop_async(self, **kwargs: Any) -> ProactiveChatPlan:
+        return self._schedule_on_loop(**kwargs)
+
+    def _schedule_on_loop(
         self,
         *,
         platform: Platform,
