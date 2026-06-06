@@ -580,6 +580,7 @@ def run_conversation(
                     _ctx_parts.append(str(r["context"]))
                 if r.get("ephemeral_system"):
                     agent.ephemeral_system_prompt = str(r["ephemeral_system"])
+                    logger.info("ephemeral_system_prompt set: %d chars", len(agent.ephemeral_system_prompt))
             elif isinstance(r, str) and r.strip():
                 _ctx_parts.append(r)
         if _ctx_parts:
