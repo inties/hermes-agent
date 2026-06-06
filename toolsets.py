@@ -486,7 +486,9 @@ TOOLSETS = {
 
     "hermes-qqbot": {
         "description": "QQBot toolset - QQ messaging via Official Bot API v2 (full access)",
-        "tools": _HERMES_CORE_TOOLS,
+        "tools": _HERMES_CORE_TOOLS + [
+            "set_next_chat_check",
+        ],
         "includes": []
     },
 

@@ -99,6 +99,60 @@ def test_pick_sticker_reports_missing_selected_file(tmp_path):
     assert "retry" in result["error"]
 
 
+def test_pick_sticker_prefers_highest_scored_match(tmp_path, monkeypatch):
+    _write_catalog(
+        tmp_path,
+        [
+            {
+                "id": "weak",
+                "kind": "sticker",
+                "path": "media/pack/weak.png",
+                "moods": ["可爱"],
+            },
+            {
+                "id": "best",
+                "kind": "sticker",
+                "path": "media/pack/best.png",
+                "moods": ["开心", "可爱", "糖果"],
+            },
+        ],
+    )
+    monkeypatch.setattr(sticker_picker_tool.random, "choice", lambda items: items[0])
+
+    result = _call_with_home(tmp_path, "开心")
+
+    assert result["success"] is True
+    assert result["media_tag"].endswith("/media/pack/best.png")
+
+
+def test_pick_sticker_supports_march7_soul_aliases(tmp_path):
+    _write_catalog(
+        tmp_path,
+        [
+            {
+                "id": "curious",
+                "kind": "sticker",
+                "path": "media/pack/curious.png",
+                "moods": ["好奇"],
+            },
+            {
+                "id": "happy",
+                "kind": "sticker",
+                "path": "media/pack/happy.png",
+                "moods": ["开心"],
+            },
+        ],
+    )
+
+    confused = _call_with_home(tmp_path, "没懂")
+    praised = _call_with_home(tmp_path, "被夸")
+
+    assert confused["success"] is True
+    assert confused["media_tag"].endswith("/media/pack/curious.png")
+    assert praised["success"] is True
+    assert praised["media_tag"].endswith("/media/pack/happy.png")
+
+
 def test_pick_sticker_avoids_recent_when_possible(tmp_path, monkeypatch):
     media_dir = _write_catalog(
         tmp_path,

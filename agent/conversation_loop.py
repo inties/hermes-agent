@@ -573,6 +573,7 @@ def run_conversation(
             platform=getattr(agent, "platform", None) or "",
             sender_id=getattr(agent, "_user_id", None) or "",
         )
+        agent.ephemeral_system_prompt = None  # clear each turn; hook must re-set
         _ctx_parts: list[str] = []
         for r in _pre_results:
             if isinstance(r, dict):
@@ -580,6 +581,7 @@ def run_conversation(
                     _ctx_parts.append(str(r["context"]))
                 if r.get("ephemeral_system"):
                     agent.ephemeral_system_prompt = str(r["ephemeral_system"])
+                    logger.info("ephemeral_system_prompt set: %d chars", len(agent.ephemeral_system_prompt))
             elif isinstance(r, str) and r.strip():
                 _ctx_parts.append(r)
         if _ctx_parts:
