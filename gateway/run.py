@@ -1487,6 +1487,9 @@ class GatewayRunner:
         # cannot grow unbounded over a long-running gateway lifetime.
         self._session_sources: "OrderedDict[str, SessionSource]" = OrderedDict()
         self._session_sources_max = 512
+        from gateway.proactive_chat import ProactiveChatScheduler, set_scheduler
+        self.proactive_chat_scheduler = ProactiveChatScheduler(self)
+        set_scheduler(self.proactive_chat_scheduler)
 
         # Cache AIAgent instances per session to preserve prompt caching.
         # Without this, a new AIAgent is created per message, rebuilding the
@@ -5599,6 +5602,13 @@ class GatewayRunner:
 
             self._running = False
             self._draining = True
+            try:
+                if getattr(self, "proactive_chat_scheduler", None) is not None:
+                    await self.proactive_chat_scheduler.shutdown()
+                from gateway.proactive_chat import set_scheduler
+                set_scheduler(None)
+            except Exception as _e:
+                logger.debug("proactive_chat_scheduler shutdown error: %s", _e)
 
             # Notify all chats with active agents BEFORE draining.
             # Adapters are still connected here, so messages can be sent.
@@ -14142,10 +14152,12 @@ class GatewayRunner:
             platform=context.source.platform.value,
             chat_id=context.source.chat_id,
             chat_name=context.source.chat_name or "",
+            chat_type=context.source.chat_type or "",
             thread_id=str(context.source.thread_id) if context.source.thread_id else "",
             user_id=str(context.source.user_id) if context.source.user_id else "",
             user_name=str(context.source.user_name) if context.source.user_name else "",
             session_key=context.session_key,
+            session_id=context.session_id,
             message_id=str(context.source.message_id) if context.source.message_id else "",
         )
 

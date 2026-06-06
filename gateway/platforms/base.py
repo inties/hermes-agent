@@ -2881,6 +2881,13 @@ class BasePlatformAdapter(ABC):
             group_sessions_per_user=self.config.extra.get("group_sessions_per_user", True),
             thread_sessions_per_user=self.config.extra.get("thread_sessions_per_user", False),
         )
+        try:
+            from gateway.proactive_chat import get_scheduler
+            scheduler = get_scheduler()
+            if scheduler is not None:
+                scheduler.cancel_for_event(event, session_key)
+        except Exception as exc:
+            logger.debug("[%s] proactive chat cancel hook failed: %s", self.name, exc)
 
         # On-entry self-heal: if the adapter still has an _active_sessions
         # entry for this key but the owner task has already exited (done or
