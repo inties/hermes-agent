@@ -234,7 +234,7 @@ def _collect_stickers(hermes_home: Path) -> tuple[list[dict[str, Any]], list[str
     return stickers, errors
 
 
-def pick_sticker_tool(args: dict[str, Any]) -> str:
+def pick_sticker_tool(args: dict[str, Any], **_kwargs: Any) -> str:
     mood = str(args.get("mood") or "").strip()
     hermes_home = get_hermes_home()
     stickers, errors = _collect_stickers(hermes_home)
