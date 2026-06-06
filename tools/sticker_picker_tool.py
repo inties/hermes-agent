@@ -40,10 +40,10 @@ _ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 _RECENT_LIMIT = 20
 
 _MOOD_ALIASES = {
-    "疑惑": ["疑惑", "困惑", "迷惑", "问号", "不懂", "啊", "好奇"],
-    "困惑": ["疑惑", "困惑", "迷惑", "问号", "不懂", "啊"],
-    "开心": ["开心", "高兴", "快乐", "笑", "庆祝", "可爱", "糖果"],
-    "高兴": ["开心", "高兴", "快乐", "笑", "庆祝", "可爱"],
+    "疑惑": ["疑惑", "困惑", "迷惑", "问号", "不懂", "没懂", "啊", "好奇"],
+    "困惑": ["疑惑", "困惑", "迷惑", "问号", "不懂", "没懂", "啊"],
+    "开心": ["开心", "高兴", "快乐", "笑", "庆祝", "可爱", "糖果", "被夸", "夸奖"],
+    "高兴": ["开心", "高兴", "快乐", "笑", "庆祝", "可爱", "被夸", "夸奖"],
     "撒娇": ["撒娇", "可爱", "贴贴", "害羞", "俏皮", "wink"],
     "贴贴": ["贴贴", "抱抱", "撒娇", "温柔", "亲密", "可爱"],
     "害羞": ["害羞", "脸红", "不好意思", "wink", "可爱"],
@@ -248,7 +248,8 @@ def pick_sticker_tool(args: dict[str, Any], **_kwargs: Any) -> str:
 
     terms = _query_terms(mood)
     scored = [(asset, _score_asset(asset, terms)) for asset in stickers]
-    candidates = [asset for asset, score in scored if score > 0]
+    best_score = max((score for _asset, score in scored), default=0)
+    candidates = [asset for asset, score in scored if score == best_score and score > 0]
     if not candidates:
         return _json_error(
             f"No sticker matched mood={mood!r}. Check the mood input and retry with a broader mood."
