@@ -275,7 +275,7 @@ def pick_sticker_tool(args: dict[str, Any], **_kwargs: Any) -> str:
     _remember_pick(picked["_usage_path"], asset_id)
     return tool_result(
         success=True,
-        media_tag="MEDIA:" + media_path.as_posix(),
+        media_tag=f"MEDIA:\"{media_path.as_posix()}\"",
     )
 
 
