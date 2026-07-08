@@ -871,19 +871,31 @@ def _run_job_script(script_path: str) -> tuple[bool, str]:
     if suffix in {".sh", ".bash"}:
         # Resolve bash dynamically so Windows (Git Bash) and Linux/macOS
         # all work.  On native Windows without Git for Windows installed
-        # shutil.which returns None — fall back to a clear error rather
-        # than a FileNotFoundError with a confusing "[WinError 2]"
-        # traceback.
-        _bash = shutil.which("bash") or (
-            "/bin/bash" if os.path.isfile("/bin/bash") else None
-        )
+        # shutil.which returns None — fall back to well-known Git Bash
+        # install paths so pythonw-launched processes (gateway watchdog)
+        # still find bash even with a restricted PATH.
+        _bash = shutil.which("bash")
+        if _bash is None and sys.platform == "win32":
+            for candidate in (
+                r"C:\Program Files\Git\usr\bin\bash.exe",
+                r"C:\Program Files (x86)\Git\usr\bin\bash.exe",
+            ):
+                if os.path.isfile(candidate):
+                    _bash = candidate
+                    break
+        if _bash is None:
+            if os.path.isfile("/bin/bash"):
+                _bash = "/bin/bash"
         if _bash is None:
             return False, (
                 f"Cannot run .sh/.bash script {path.name!r}: bash not found on PATH. "
                 "On Windows, install Git for Windows (which ships Git Bash) "
                 "or rewrite the script as Python (.py)."
             )
-        argv = [_bash, _to_msys_path(path) if sys.platform == "win32" else path.as_posix()]
+        # Git Bash on Windows handles all path formats (C:\, C:/, /c/),
+        # so path.as_posix() (C:/Users/…) is portable and avoids MSYS2
+        # path-resolution quirks in pythonw-launched subprocesses.
+        argv = [_bash, path.as_posix()]
     else:
         argv = [sys.executable, str(path)]
 
