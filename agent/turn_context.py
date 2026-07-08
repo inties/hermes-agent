@@ -490,7 +490,12 @@ def build_turn_context(
         except Exception:
             _spill_if_oversized = None  # type: ignore[assignment]
             _spill_config_cached = None
+        agent.ephemeral_system_prompt = None  # clear each turn; hook must re-set
         for r in _pre_results:
+            if isinstance(r, dict):
+                if r.get("ephemeral_system"):
+                    agent.ephemeral_system_prompt = str(r["ephemeral_system"])
+                    logger.info("ephemeral_system_prompt set: %d chars", len(agent.ephemeral_system_prompt))
             _piece: str = ""
             if isinstance(r, dict) and r.get("context"):
                 _piece = str(r["context"])
